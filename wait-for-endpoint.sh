@@ -12,13 +12,13 @@ usage()
 {
     cat << USAGE >&2
 Usage:
-    $SCRIPT_NAME uri [-s] [-t timeout] [-- COMMAND ARGS]
-    uri                         a valid http(s) URI
-    -s | --strict               Only execute COMMAND if the test succeeds
-    -q | --quiet                Don't output any status messages
-    -t TIMEOUT | --timeout=TIMEOUT
-                                Timeout in seconds, zero for no timeout
-    -- COMMAND ARGS             Command with args to run after the test finishes
+    $SCRIPT_NAME uri [-s] [-r response] [-t timeout] [-- COMMAND ARGS]
+    uri                                               A valid http(s) URI
+    -s | --strict                                     Only execute COMMAND if the test succeeds
+    -q | --quiet                                      Don't output any status messages
+    -r RESPONSE_STRING | --response=RESPONSE_STRING   String that should be in the response body to pass the test
+    -t TIMEOUT | --timeout=TIMEOUT                    Timeout in seconds, zero for no timeout
+    -- COMMAND ARGS                                   Command with args to run after the test finishes
 USAGE
     exit 1
 }
@@ -33,8 +33,10 @@ wait_for()
     WAIT_START_TS=$(date +%s)
     while :
     do
-            STATUS_CODE=$(curl --connect-timeout 2 --insecure -s -o /dev/null -w ''%{http_code}'' $URI)
-            test "$STATUS_CODE" == "200"
+            RESPONSE=$(curl --connect-timeout 2 --insecure -s -w "\n%{response_code}" $URI)
+            RESPONSE_CODE=$(tail -n1 <<< "$RESPONSE")
+            RESPONSE_BODY=$(sed '$ d' <<< "$RESPONSE")
+            [[ $RESPONSE_CODE == "200" ]] && [[ $RESPONSE_BODY == *"$RESPONSE_STRING"* ]]
             OUTCOME=$?
         if [[ $OUTCOME -eq 0 ]]; then
             WAIT_END_TS=$(date +%s)
@@ -51,9 +53,9 @@ wait_for_wrapper()
 {
     # In order to support SIGINT during timeout: http://unix.stackexchange.com/a/57692
     if [[ $QUIET -eq 1 ]]; then
-        timeout $BUSY_BOX_TIMEFLAG $TIMEOUT $0 $URI --quiet --child --timeout=$TIMEOUT &
+        timeout $BUSY_BOX_TIMEFLAG $TIMEOUT $0 $URI --quiet --child --timeout=$TIMEOUT --response=$RESPONSE_STRING &
     else
-        timeout $BUSY_BOX_TIMEFLAG $TIMEOUT $0 $URI --child --timeout=$TIMEOUT &
+        timeout $BUSY_BOX_TIMEFLAG $TIMEOUT $0 $URI --child --timeout=$TIMEOUT --response=$RESPONSE_STRING &
     fi
     SUBPROCESS_PID=$!
     trap "kill -INT -$SUBPROCESS_PID" INT
@@ -101,6 +103,15 @@ do
         STRICT=1
         shift 1
         ;;
+        -r)
+        RESPONSE_STRING="$2"
+        if [[ $RESPONSE_STRING == "" ]]; then break; fi
+        shift 2
+        ;;
+        --response=*)
+        RESPONSE_STRING="${1#*=}"
+        shift 1
+        ;;
         -t)
         TIMEOUT="$2"
         if [[ $TIMEOUT == "" ]]; then break; fi
@@ -135,7 +146,7 @@ if [[ "$URI" == "" ]]; then
 fi
 validate_uri
 
-
+RESPONSE_STRING=${RESPONSE_STRING:-""}
 TIMEOUT=${TIMEOUT:-15}
 STRICT=${STRICT:-0}
 CHILD=${CHILD:-0}
